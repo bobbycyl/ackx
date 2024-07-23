@@ -6,17 +6,21 @@ import os
 import re
 import subprocess
 import shutil
+from typing import Optional
 
 import chardet
-import patoolib
 
 re_spaces = re.compile(r"\s")
 
 
-def detect_encoding(filename: str, encoding_guess_length: int) -> str:
-    with open(filename, "rb") as fi:
-        result = chardet.detect(fi.read(encoding_guess_length))
-    return result["encoding"]
+def detect_encoding_and_read(filename: str, encoding_guess_length: int) -> str:
+    with open(filename, "rb") as fi_b:
+        result = chardet.detect(fi_b.read(encoding_guess_length))
+    read_str = ""
+    if result["encoding"] is not None:
+        with open(filename, "r", encoding=result["encoding"]) as fi_t:
+            read_str = fi_t.read()
+    return read_str
 
 
 def print_search_result(pattern, string, hint):
@@ -46,18 +50,21 @@ def print_search_result(pattern, string, hint):
 
 
 def advanced_search(
-    tika_path: str,
     directory: str,
     substring: str,
     encoding_guess_length: int,
     auto_delete_tmp: bool = True,
+    tika_path: Optional[str] = None,
+    deep_search: bool = False,
 ):
     logging.disable(logging.ERROR)
+    if deep_search:
+        import patoolib
     for root, dirs, files in os.walk(directory):
         for filename in files:
             real_filename = os.path.join(root, filename)
             read_str = ""
-            if patoolib.is_archive(real_filename):
+            if deep_search and patoolib.is_archive(real_filename):
                 # archive
                 extracted_dir = os.path.join(root, ".tmp", filename)
                 try:
@@ -71,13 +78,17 @@ def advanced_search(
                 )
                 if auto_delete_tmp:
                     shutil.rmtree(extracted_dir)
-            else:
+            elif tika_path is not None:
                 cp = subprocess.run(
                     ["java", "-jar", tika_path, "-t", real_filename],
                     capture_output=True,
                     text=True,
                 )
                 read_str = cp.stdout
+                if cp.stderr is not None:
+                    read_str += detect_encoding_and_read()
+            else:
+                read_str = detect_encoding_and_read()
 
             print_search_result(substring, read_str, filename)
 
@@ -87,16 +98,25 @@ def advanced_search(
 
 
 arg_parser = argparse.ArgumentParser(description="ack extended")
-arg_parser.add_argument("tika_path")
 arg_parser.add_argument("directory")
 arg_parser.add_argument("substring")
-arg_parser.add_argument("--encoding-guess-length", type=int, default=256)
-arg_parser.add_argument("--auto-clean", action="store_true")
+arg_parser.add_argument("-e", "--encoding-guess-length", type=int, default=256)
+arg_parser.add_argument("-c", "--auto-clean", action="store_true")
+arg_parser.add_argument(
+    "-t", "--tika-path", help="use Tika to support more file types"
+)
+arg_parser.add_argument(
+    "-d",
+    "--deep-search",
+    help="use Patool to support archives",
+    action="store_true",
+)
 args = arg_parser.parse_args()
 advanced_search(
-    args.tika_path,
     args.directory,
     args.substring,
     args.encoding_guess_length,
     args.auto_clean,
+    args.tika_path,
+    args.deep_search,
 )
