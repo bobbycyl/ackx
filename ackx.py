@@ -85,10 +85,8 @@ def advanced_search(
                     text=True,
                 )
                 read_str = cp.stdout
-                if cp.stderr is not None:
-                    read_str += detect_encoding_and_read()
             else:
-                read_str = detect_encoding_and_read()
+                read_str = detect_encoding_and_read(real_filename, encoding_guess_length)
 
             print_search_result(substring, read_str, filename)
 
