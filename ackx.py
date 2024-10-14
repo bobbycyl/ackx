@@ -18,35 +18,52 @@ def detect_encoding_and_read(filename: str, encoding_guess_length: int) -> str:
         result = chardet.detect(fi_b.read(encoding_guess_length))
     read_str = ""
     if result["encoding"] is not None:
-        with open(filename, "r", encoding=result["encoding"]) as fi_t:
+        with open(filename, "r", encoding=result["encoding"], errors="ignore") as fi_t:
             read_str = fi_t.read()
-    return read_str
+    return read_str if read_str else ""
 
 
-def print_search_result(pattern, string, hint):
+def print_search_result(pattern: str, string: str, hint: str) -> None:
     for i, match in enumerate(re.finditer(pattern, string)):
+        if i == 0:
+            print("\n\033[1m%s\033[0m" % hint)
         line_number = string.count("\n", 0, match.start()) + 1
-        column_number = match.start() - string.rfind("\n", 0, match.start())
-        first_space_after_substring_m = re_spaces.search(string, match.end())
+        enter_before = string.rfind("\n", 0, match.start())
+        enter_after = string.find("\n", match.end())
+        column_number = match.start() - enter_before
+        first_space_after_substring_m = re_spaces.search(string, match.end() + 15)
         first_space_after_substring = (
             first_space_after_substring_m.end()
             if first_space_after_substring_m is not None
             else -1
         )
-        first_enter_after_substring = string.find("\n", match.end())
-        word = string[
+        word_after = string[
             match.end():(
                 first_space_after_substring
-                if first_space_after_substring < first_enter_after_substring
-                else first_enter_after_substring
+                if first_space_after_substring < enter_after
+                else enter_after
             )
         ]
-        if i == 0:
-            print("\033[1m%s\033[0m" % hint)
-        print(
-            "\033[1;32m%d\033[0m:\033[1;32m%d\033[0m\t\033[31m%s\033[0m%s"
-            % (line_number, column_number, pattern, word)
+        if len(word_after) > 15:
+            word_after = word_after[:16] + "..."
+        first_space_before_substring_m = re_spaces.search(string, 0, match.start() - 15)
+        first_space_before_substring = (
+            first_space_before_substring_m.start()
+            if first_space_before_substring_m is not None
+            else 0
         )
+        word_before = string[
+            (
+                first_space_before_substring
+                if first_space_before_substring > enter_before
+                else enter_before
+            ):match.start()
+        ]
+        if len(word_before) > 15:
+            word_before = "..." + word_before[-15:]
+        joint_str = "\033[1;32m%d\033[0m:\033[1;32m%d\033[0m\t%s\033[31m%s\033[0m%s" \
+            % (line_number, column_number, word_before, pattern, word_after)
+        print(joint_str.replace("\n", ""))
 
 
 def advanced_search(
@@ -56,7 +73,8 @@ def advanced_search(
     auto_delete_tmp: bool = True,
     tika_path: Optional[str] = None,
     deep_search: bool = False,
-):
+) -> None:
+    print('walking "%s" | grep "%s"' % (directory, substring))
     logging.disable(logging.ERROR)
     if deep_search:
         import patoolib
@@ -82,6 +100,7 @@ def advanced_search(
                 cp = subprocess.run(
                     ["java", "-jar", tika_path, "-t", real_filename],
                     capture_output=True,
+                    encoding="utf-8",
                     text=True,
                 )
                 read_str = cp.stdout
