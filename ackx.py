@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import subprocess
-import shutil
+import tempfile
 from typing import Optional
 
 import chardet
@@ -13,7 +13,7 @@ import chardet
 re_spaces = re.compile(r"\s")
 
 
-def detect_encoding_and_read(filename: str, encoding_guess_length: int) -> str:
+def detect_encoding_and_read(filename: str, encoding_guess_length: int = 4096) -> str:
     with open(filename, "rb") as fi_b:
         result = chardet.detect(fi_b.read(encoding_guess_length))
     read_str = ""
@@ -38,7 +38,7 @@ def print_search_result(pattern: str, string: str, hint: str) -> None:
             else -1
         )
         word_after = string[
-            match.end():(
+            match.end() : (
                 first_space_after_substring
                 if first_space_after_substring < enter_after
                 else enter_after
@@ -57,24 +57,33 @@ def print_search_result(pattern: str, string: str, hint: str) -> None:
                 first_space_before_substring
                 if first_space_before_substring > enter_before
                 else enter_before
-            ):match.start()
+            ) : match.start()
         ]
         if len(word_before) > 15:
             word_before = "..." + word_before[-15:]
-        joint_str = "\033[1;32m%d\033[0m:\033[1;32m%d\033[0m\t%s\033[31m%s\033[0m%s" \
-            % (line_number, column_number, word_before, pattern, word_after)
-        print(joint_str.replace("\n", ""))
+        joint_str = "\033[1;32m%d\033[0m:\033[1;32m%d\033[0m\t%s\033[31m%s\033[0m%s" % (
+            line_number,
+            column_number,
+            word_before,
+            pattern,
+            word_after,
+        )
+        print(joint_str.replace("\n", "\\n"))
 
 
 def advanced_search(
     directory: str,
     substring: str,
-    encoding_guess_length: int,
-    auto_delete_tmp: bool = True,
     tika_path: Optional[str] = None,
     deep_search: bool = False,
+    father: Optional[str] = None,
 ) -> None:
-    print('walking "%s" | grep "%s"' % (directory, substring))
+    if father is None:
+        if tika_path is not None:
+            print("using Tika to support more file types")
+        if deep_search:
+            print("using Patool to support archives")
+        print('walking "%s" | grep "%s"' % (directory, substring))
     logging.disable(logging.ERROR)
     if deep_search:
         import patoolib
@@ -84,18 +93,24 @@ def advanced_search(
             read_str = ""
             if deep_search and patoolib.is_archive(real_filename):
                 # archive
-                extracted_dir = os.path.join(root, ".tmp", filename)
-                try:
-                    patoolib.extract_archive(
-                        os.path.join(root, real_filename), outdir=extracted_dir
+                with tempfile.TemporaryDirectory() as extracted_dir:
+                    try:
+                        patoolib.extract_archive(
+                            os.path.join(root, real_filename), outdir=extracted_dir
+                        )
+                    except Exception as e:
+                        print("\033[31m%s: %s\033[0m" % (real_filename, e))
+                    advanced_search(
+                        extracted_dir,
+                        substring,
+                        tika_path,
+                        deep_search,
+                        (
+                            os.path.join(father, filename)
+                            if father is not None
+                            else filename
+                        ),
                     )
-                except Exception as e:
-                    print(str(e))
-                advanced_search(
-                    tika_path, extracted_dir, substring, encoding_guess_length
-                )
-                if auto_delete_tmp:
-                    shutil.rmtree(extracted_dir)
             elif tika_path is not None:
                 cp = subprocess.run(
                     ["java", "-jar", tika_path, "-t", real_filename],
@@ -105,23 +120,20 @@ def advanced_search(
                 )
                 read_str = cp.stdout
             else:
-                read_str = detect_encoding_and_read(real_filename, encoding_guess_length)
+                read_str = detect_encoding_and_read(real_filename)
 
-            print_search_result(substring, read_str, filename)
-
-    if auto_delete_tmp and os.path.exists(os.path.join(directory, ".tmp")):
-        os.rmdir(os.path.join(directory, ".tmp"))
-    logging.disable(logging.NOTSET)
+            print_search_result(
+                substring,
+                read_str,
+                os.path.join(father, filename) if father is not None else filename,
+            )
 
 
 arg_parser = argparse.ArgumentParser(description="ack extended")
 arg_parser.add_argument("directory")
 arg_parser.add_argument("substring")
-arg_parser.add_argument("-e", "--encoding-guess-length", type=int, default=256)
-arg_parser.add_argument("-c", "--auto-clean", action="store_true")
-arg_parser.add_argument(
-    "-t", "--tika-path", help="use Tika to support more file types"
-)
+# arg_parser.add_argument("ignorecase", action="store_true", default=False)
+arg_parser.add_argument("-t", "--tika-path", help="use Tika to support more file types")
 arg_parser.add_argument(
     "-d",
     "--deep-search",
@@ -132,8 +144,6 @@ args = arg_parser.parse_args()
 advanced_search(
     args.directory,
     args.substring,
-    args.encoding_guess_length,
-    args.auto_clean,
     args.tika_path,
     args.deep_search,
 )
